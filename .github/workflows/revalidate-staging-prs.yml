@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
 
   schedule:
-    # Every 5 minutes, offset from the top of the hour
-    - cron: '2/5 * * * *'
+    - cron: '*/5 * * * *'
 
 permissions:
   actions: write
