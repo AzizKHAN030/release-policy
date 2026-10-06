@@ -6,6 +6,10 @@ on:
   schedule:
     - cron: '*/5 * * * *'
 
+concurrency:
+  group: mvp-staging-freeze
+  cancel-in-progress: false
+
 permissions:
   actions: write
   contents: read
@@ -23,13 +27,11 @@ jobs:
         run: |
           set -e
 
-          echo "Reading current RELEASE_FREEZE value..."
-
           CURRENT=$(GH_TOKEN="$VARIABLES_TOKEN" gh api \
             "repos/$GITHUB_REPOSITORY/actions/variables/RELEASE_FREEZE" \
             --jq '.value')
 
-          echo "Current value: $CURRENT"
+          echo "Current RELEASE_FREEZE=$CURRENT"
 
           if [ "$CURRENT" = "true" ]; then
             NEW_VALUE=false
@@ -37,7 +39,7 @@ jobs:
             NEW_VALUE=true
           fi
 
-          echo "Changing RELEASE_FREEZE to: $NEW_VALUE"
+          echo "Changing RELEASE_FREEZE=$NEW_VALUE"
 
           GH_TOKEN="$VARIABLES_TOKEN" gh api \
             --method PATCH \
@@ -45,7 +47,6 @@ jobs:
             -f name="RELEASE_FREEZE" \
             -f value="$NEW_VALUE"
 
-          echo ""
           echo "Revalidating open PRs targeting staging..."
 
           gh pr list \
@@ -78,7 +79,4 @@ jobs:
             fi
           done
 
-          echo ""
-          echo "========================================"
           echo "RELEASE_FREEZE=$NEW_VALUE"
-          echo "========================================"
