@@ -1,0 +1,50 @@
+name: Revalidate Staging PRs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Revalidate open staging PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Finding open PRs targeting staging..."
+
+          gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base staging \
+            --state open \
+            --limit 100 \
+            --json number,headRefName \
+            --jq '.[] | "\(.number)\t\(.headRefName)"' |
+          while IFS=$'\t' read -r PR_NUMBER HEAD_BRANCH; do
+
+            echo "PR #$PR_NUMBER - $HEAD_BRANCH"
+
+            RUN_ID=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow release-policy.yml \
+              --branch "$HEAD_BRANCH" \
+              --event pull_request \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              echo "Re-running release policy for PR #$PR_NUMBER"
+              gh run rerun "$RUN_ID" \
+                --repo "$GITHUB_REPOSITORY"
+            else
+              echo "No Release Policy run found for PR #$PR_NUMBER"
+            fi
+
+          done
