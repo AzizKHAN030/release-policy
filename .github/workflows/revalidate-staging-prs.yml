@@ -1,10 +1,7 @@
-name: MVP Toggle Staging Freeze
+name: Revalidate Staging PRs
 
 on:
   workflow_dispatch:
-
-  schedule:
-    - cron: '*/5 * * * *'
 
 permissions:
   actions: write
@@ -12,41 +9,15 @@ permissions:
   pull-requests: read
 
 jobs:
-  toggle-and-revalidate:
+  revalidate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Toggle freeze and revalidate staging PRs
+      - name: Revalidate open staging PRs
         env:
           GH_TOKEN: ${{ github.token }}
-          VARIABLES_TOKEN: ${{ secrets.VARIABLES_TOKEN }}
         run: |
-          set -e
-
-          echo "Reading current RELEASE_FREEZE value..."
-
-          CURRENT=$(GH_TOKEN="$VARIABLES_TOKEN" gh api \
-            "repos/$GITHUB_REPOSITORY/actions/variables/RELEASE_FREEZE" \
-            --jq '.value')
-
-          echo "Current value: $CURRENT"
-
-          if [ "$CURRENT" = "true" ]; then
-            NEW_VALUE=false
-          else
-            NEW_VALUE=true
-          fi
-
-          echo "Changing RELEASE_FREEZE to: $NEW_VALUE"
-
-          GH_TOKEN="$VARIABLES_TOKEN" gh api \
-            --method PATCH \
-            "repos/$GITHUB_REPOSITORY/actions/variables/RELEASE_FREEZE" \
-            -f name="RELEASE_FREEZE" \
-            -f value="$NEW_VALUE"
-
-          echo ""
-          echo "Revalidating open PRs targeting staging..."
+          echo "Finding open PRs targeting staging..."
 
           gh pr list \
             --repo "$GITHUB_REPOSITORY" \
@@ -57,7 +28,7 @@ jobs:
             --jq '.[] | "\(.number)\t\(.headRefName)"' |
           while IFS=$'\t' read -r PR_NUMBER HEAD_BRANCH; do
 
-            echo "PR #$PR_NUMBER ($HEAD_BRANCH)"
+            echo "PR #$PR_NUMBER - $HEAD_BRANCH"
 
             RUN_ID=$(gh run list \
               --repo "$GITHUB_REPOSITORY" \
@@ -69,16 +40,11 @@ jobs:
               --jq '.[0].databaseId')
 
             if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-              echo "Re-running release-policy for PR #$PR_NUMBER"
-
+              echo "Re-running release policy for PR #$PR_NUMBER"
               gh run rerun "$RUN_ID" \
                 --repo "$GITHUB_REPOSITORY"
             else
-              echo "No release-policy run found for PR #$PR_NUMBER"
+              echo "No Release Policy run found for PR #$PR_NUMBER"
             fi
-          done
 
-          echo ""
-          echo "========================================"
-          echo "RELEASE_FREEZE=$NEW_VALUE"
-          echo "========================================"
+          done
