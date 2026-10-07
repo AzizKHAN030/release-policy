@@ -1,0 +1,72 @@
+name: Set Staging Freeze
+
+on:
+  workflow_dispatch:
+    inputs:
+      state:
+        description: Freeze state
+        required: true
+        type: choice
+        options:
+          - freeze
+          - unfreeze
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  set-and-revalidate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set freeze state and revalidate staging PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VARIABLES_TOKEN: ${{ secrets.VARIABLES_TOKEN }}
+          STATE: ${{ inputs.state }}
+        run: |
+          set -e
+
+          if [ "$STATE" = "freeze" ]; then
+            NEW_VALUE=true
+          else
+            NEW_VALUE=false
+          fi
+
+          echo "Setting RELEASE_FREEZE=$NEW_VALUE"
+
+          GH_TOKEN="$VARIABLES_TOKEN" gh api \
+            --method PATCH \
+            "repos/$GITHUB_REPOSITORY/actions/variables/RELEASE_FREEZE" \
+            -f name="RELEASE_FREEZE" \
+            -f value="$NEW_VALUE"
+
+          echo "Revalidating open PRs targeting staging..."
+
+          gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base staging \
+            --state open \
+            --limit 100 \
+            --json number,headRefName \
+            --jq '.[] | "\(.number)\t\(.headRefName)"' |
+          while IFS=$'\t' read -r PR_NUMBER HEAD_BRANCH; do
+
+            RUN_ID=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow release-policy.yml \
+              --branch "$HEAD_BRANCH" \
+              --event pull_request \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              echo "Re-running release-policy for PR #$PR_NUMBER"
+
+              gh run rerun "$RUN_ID" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+          done
