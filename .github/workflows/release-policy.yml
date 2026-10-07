@@ -12,39 +12,43 @@ on:
       - unlabeled
       - ready_for_review
 
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
 jobs:
   release-policy:
-    name: release-policy
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check release policy
+      - name: Evaluate release policy
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_FREEZE: ${{ vars.RELEASE_FREEZE }}
+          SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "Release freeze: $RELEASE_FREEZE"
-
-          if [ "$RELEASE_FREEZE" != "true" ]; then
-            echo "✅ Release freeze is disabled."
-            exit 0
-          fi
-
-          echo "Release freeze is active."
-
           LABELS=$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH")
 
-          echo "PR labels:"
-          echo "$LABELS"
+          STATE="success"
+          DESCRIPTION="Staging is open"
 
-          if echo "$LABELS" | grep -Fxq "revert"; then
-            echo "✅ Revert PR is allowed during freeze."
-            exit 0
+          if [ "$RELEASE_FREEZE" = "true" ]; then
+            if echo "$LABELS" | grep -Fxq "revert"; then
+              DESCRIPTION="Revert allowed during staging freeze"
+            elif echo "$LABELS" | grep -Fxq "release-fix"; then
+              DESCRIPTION="Release fix allowed during staging freeze"
+            else
+              STATE="failure"
+              DESCRIPTION="Staging is frozen for normal PRs"
+            fi
           fi
 
-          if echo "$LABELS" | grep -Fxq "release-fix"; then
-            echo "✅ Release fix is allowed during freeze."
-            exit 0
-          fi
+          echo "Setting release-policy-gate=$STATE for $SHA"
 
-          echo "❌ Staging is frozen. Only 'revert' or 'release-fix' PRs are allowed."
-          exit 1
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$STATE" \
+            -f context="release-policy-gate" \
+            -f description="$DESCRIPTION"
