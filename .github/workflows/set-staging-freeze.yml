@@ -12,16 +12,16 @@ on:
           - unfreeze
 
 permissions:
-  actions: write
   contents: read
   pull-requests: read
+  statuses: write
 
 jobs:
   set-and-revalidate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set freeze state and revalidate staging PRs
+      - name: Set freeze and update PR statuses
         env:
           GH_TOKEN: ${{ github.token }}
           VARIABLES_TOKEN: ${{ secrets.VARIABLES_TOKEN }}
@@ -30,43 +30,57 @@ jobs:
           set -e
 
           if [ "$STATE" = "freeze" ]; then
-            NEW_VALUE=true
+            FREEZE=true
           else
-            NEW_VALUE=false
+            FREEZE=false
           fi
 
-          echo "Setting RELEASE_FREEZE=$NEW_VALUE"
+          echo "Setting RELEASE_FREEZE=$FREEZE"
 
           GH_TOKEN="$VARIABLES_TOKEN" gh api \
             --method PATCH \
             "repos/$GITHUB_REPOSITORY/actions/variables/RELEASE_FREEZE" \
             -f name="RELEASE_FREEZE" \
-            -f value="$NEW_VALUE"
+            -f value="$FREEZE"
 
-          echo "Revalidating open PRs targeting staging..."
+          echo "Updating all open PRs targeting staging..."
 
           gh pr list \
             --repo "$GITHUB_REPOSITORY" \
             --base staging \
             --state open \
             --limit 100 \
-            --json number,headRefName \
-            --jq '.[] | "\(.number)\t\(.headRefName)"' |
-          while IFS=$'\t' read -r PR_NUMBER HEAD_BRANCH; do
+            --json number,headRefOid,labels \
+            --jq '.[] | @base64' |
+          while read -r PR; do
 
-            RUN_ID=$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow release-policy.yml \
-              --branch "$HEAD_BRANCH" \
-              --event pull_request \
-              --limit 1 \
-              --json databaseId \
-              --jq '.[0].databaseId')
+            DATA=$(echo "$PR" | base64 --decode)
 
-            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-              echo "Re-running release-policy for PR #$PR_NUMBER"
+            NUMBER=$(echo "$DATA" | jq -r '.number')
+            SHA=$(echo "$DATA" | jq -r '.headRefOid')
+            LABELS=$(echo "$DATA" | jq -r '.labels[].name')
 
-              gh run rerun "$RUN_ID" \
-                --repo "$GITHUB_REPOSITORY"
+            STATUS="success"
+            DESCRIPTION="Staging is open"
+
+            if [ "$FREEZE" = "true" ]; then
+              if echo "$LABELS" | grep -Fxq "revert"; then
+                DESCRIPTION="Revert allowed during staging freeze"
+              elif echo "$LABELS" | grep -Fxq "release-fix"; then
+                DESCRIPTION="Release fix allowed during staging freeze"
+              else
+                STATUS="failure"
+                DESCRIPTION="Staging is frozen for normal PRs"
+              fi
             fi
+
+            echo "PR #$NUMBER: $SHA → $STATUS"
+
+            gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+              -f state="$STATUS" \
+              -f context="release-policy-gate" \
+              -f description="$DESCRIPTION"
+
           done
